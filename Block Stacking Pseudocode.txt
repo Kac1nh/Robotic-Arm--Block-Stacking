@@ -1,0 +1,98 @@
+Block Stacking Pseudocode
+
+Initialize System
+
+BEGIN
+    Initialize ROS2 environment
+    Start camera node (RGB-D streaming)
+    Start vision node (block detection)
+    Start MoveIt! motion planner
+    Connect to STM32 robotic arm controller
+    Calibrate camera to robot base frame
+    Set tower_base_pose = (x0, y0, z0)
+    stack_height = 0
+    block_height = 0.03 m
+END
+
+
+Main Stacking Loop
+FOR each block in total_blocks (1 to 5):
+
+    # Step 1: Detect Block
+    frame = CaptureImage()
+    block_pose = VisionNode.detect_block_pose(frame)
+    IF block_pose == NULL:
+        Retry detection or skip block
+    ENDIF
+
+    # Step 2: Pick Block
+    MoveArmTo(pre_grasp_position(block_pose))
+    LowerArmTo(grasp_position(block_pose))
+    Gripper.close()
+    LiftArmTo(safe_height)
+
+    # Step 3: Calculate Placement Position
+    target_pose = tower_base_pose
+    target_pose.z += stack_height
+
+    # Apply Center-of-Mass Correction
+    com_x, com_y = compute_current_center_of_mass()
+    target_pose.x += (tower_base_pose.x - com_x) * 0.2
+    target_pose.y += (tower_base_pose.y - com_y) * 0.2
+
+    # Step 4: Move to Placement Position
+    MoveArmTo(pre_place_position(target_pose))
+    SlowDescentTo(place_position(target_pose), velocity=0.05)
+    Wait(0.5)  # Allow vibrations to settle
+    Gripper.open_gradually()
+    Wait(0.5)
+    LiftArmSlowly(offset=5mm)
+
+    # Step 5: Vision Verification
+    tower_tilt = VisionNode.measure_tower_tilt()
+    IF tower_tilt > 3 degrees OR block_misaligned():
+        Attempt small re-alignment
+        Re-verify placement
+    ENDIF
+
+    # Step 6: Update Tower Parameters
+    stack_height += block_height
+    UpdateTowerPositionList(block_pose)
+
+    # Step 7: Stability Check
+    stability_timer = 5 seconds
+    stable = MonitorTowerFor(stability_timer)
+    IF stable == FALSE:
+        Abort stacking or reduce next height increment
+    ENDIF
+
+ENDFOR
+
+
+Helper Functions
+FUNCTION compute_current_center_of_mass():
+    x_com = mean(x_positions of all placed blocks)
+    y_com = mean(y_positions of all placed blocks)
+    RETURN (x_com, y_com)
+END FUNCTION
+
+FUNCTION block_misaligned():
+    new_pose = VisionNode.detect_block_top()
+    offset = distance(new_pose.center, expected_pose.center)
+    RETURN (offset > 5mm)
+END FUNCTION
+
+FUNCTION MonitorTowerFor(time):
+    FOR t in 0 → time:
+        tilt = VisionNode.measure_tower_tilt()
+        IF tilt > 3 degrees:
+            RETURN FALSE
+    RETURN TRUE
+END FUNCTION
+
+
+Shutdown
+MoveArmTo(home_position)
+Gripper.open()
+Stop all ROS2 nodes
+Shutdown system safely
